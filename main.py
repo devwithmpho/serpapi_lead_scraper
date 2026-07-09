@@ -1,101 +1,110 @@
 from serpapi import GoogleSearch
-import os, time
-from dotenv import load_dotenv
+import os
+import time
 from datetime import datetime
+
 import pandas as pd
+from dotenv import load_dotenv
 
 from utils import clean_number
 from utils import clean_url
-from utils import create_session
 
 load_dotenv()
-api_key = os.getenv("SERPAPI_KEY")
 
-niche = input("Enter niche: ")
 
-while niche == "":
-    niche = input("Enter niche: ")
+def scrape_businesses(api_key, query, coords, max_results=100):
+    all_results = []
 
-niche = niche.lower()
+    start = 0
 
-all_results = []
-start = 0
-MAX_START = 100
+    while start < max_results:
 
-while start < MAX_START:
-    params = {
-        "q": niche,
-        "engine": "google_maps",
-        "ll": "@-26.0082584,26.8077072,8z",
-        "hl": "af",
-        "gl": "za",
-        "start": start,
-        "api_key": api_key
-    }
+        params = {
+            "engine": "google_maps",
+            "q": query,
+            "ll": coords,
+            "hl": "en",
+            "gl": "za",
+            "start": start,
+            "api_key": api_key,
+        }
 
-    search = GoogleSearch(params)
-    result = search.get_dict()
+        search = GoogleSearch(params)
+        result = search.get_dict()
 
-    local_results = result.get("local_results", [])
-    if not local_results:
-        break
+        local_results = result.get("local_results", [])
 
-    all_results.extend(local_results)
+        if not local_results:
+            break
 
-    print(f"Fetched {len(local_results)} results at start={start}")
+        all_results.extend(local_results)
 
-    # pagination check
-    pagination = result.get("serpapi_pagination", {})
-    if "next" in pagination:
+        pagination = result.get("serpapi_pagination", {})
+
+        if "next" not in pagination:
+            break
+
         start += 20
-    else:
-        break
 
-    time.sleep(1.5)
+        time.sleep(0.2)
 
-print(f"Total businesses saved: {len(all_results)}")
+    details = []
 
-### Cleaning business data
-details = []
+    for place in all_results:
 
-session = create_session()
+        details.append(
+            [
+                place.get("title"),
+                place.get("rating"),
+                place.get("reviews"),
+                clean_number(place.get("phone")),
+                clean_url(place.get("website")),
+            ]
+        )
 
-clean_start = time.time()
+    df = pd.DataFrame(
+        details,
+        columns=["Title", "Rating", "Reviews", "Phone", "Website"]
+    )
 
-for place in all_results:
-    title = place.get("title")
-    phone = clean_number(place.get("phone"))
-    website = clean_url(place.get("website"), session)
+    df = df[df["Phone"].notna()]
+    df = df.drop_duplicates()
+    df = df.dropna(subset=["Title", "Phone"])
 
-    details.append([title, phone, website])
+    return df
 
-clean_end = time.time()
-clean_time_elapsed = round((clean_end - clean_start) / 60, 2)
 
-print(f"Total time elapsed from cleaning: {clean_time_elapsed} minutes")
+def save_report(df, query):
 
-##### saving data to a csv file
+    now = datetime.now()
 
-# csv file name
-now = datetime.now()
-file_timestamp = now.strftime("%Y-%m-%d_%H-%M")
-filename = f"lead_data_{niche}_{file_timestamp}.csv"
+    filename = f"lead_data_{query}_{now.strftime('%Y-%m-%d_%H-%M')}.csv"
 
-# send csv to reports directory
-folder_name = "reports"
-if not os.path.exists(folder_name):
-    os.makedirs(folder_name)
+    os.makedirs("reports", exist_ok=True)
 
-file_path = os.path.join(folder_name, filename)
+    path = os.path.join("reports", filename)
 
-# cleaning data
+    df.to_csv(path, index=False)
 
-df = pd.DataFrame(details)
-df.columns = ["Title", "Phone", "Website"]
-df_cleaned = df[df["Phone"].notna()]
+    return path
 
-df_cleaned = df_cleaned.drop_duplicates()
-df_cleaned = df_cleaned.dropna()
 
-# send to csv
-df_cleaned.to_csv(file_path, header=False, index=False)
+if __name__ == "__main__":
+
+    api_key = os.getenv("SERPAPI_KEY")
+
+    query = input("Search Query: ")
+
+    location = input("Location: ")
+
+    results = scrape_businesses(
+        api_key,
+        query,
+        location,
+        100
+    )
+
+    file = save_report(results, query)
+
+    print(f"Saved {len(results)} businesses")
+    print(file)
